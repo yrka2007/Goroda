@@ -1,5 +1,4 @@
 import PyQt5, PyQt6, PySide6
-
 import sys
 import json
 import random
@@ -10,6 +9,7 @@ import logging
 from pathlib import Path
 import os
 from collections import defaultdict, deque
+import time
 
 log_dir = Path("logs")
 os.makedirs(log_dir, exist_ok=True)
@@ -105,8 +105,16 @@ def game(cities1, letter_map1):
     last_moves = deque(maxlen=5)
     last_moves.append(("Компьютер", first_city_orig, current_letter))
 
+    # Счётчики времени для будущих очков
+    turn_times = []          # список времени, затраченного на каждый ход игрока
+    total_player_time = 0    # суммарное время всех ходов игрока
+    turn_number = 0          # номер хода игрока (для информации)
+
     while True:
         # Ход игрока
+        print("\n--- Ваш ход ---")
+        start_time = time.time()   # запускаем таймер перед вводом
+
         while True:
             user_input = input("Ваш город (или 'сдаюсь', 'стоп', 'exit', 'quit' для выхода): ").strip()
             if user_input.lower() in ('сдаюсь', 'стоп', 'exit', 'quit'):
@@ -136,16 +144,27 @@ def game(cities1, letter_map1):
                 print(f"Город должен начинаться на букву '{current_letter.upper()}'. Попробуйте снова.")
                 continue
 
-            user_original = cities1[norm_user]
-            used.add(norm_user)
-            fl = first(norm_user)
-            if fl in available and norm_user in available[fl]:
-                available[fl].remove(norm_user)
-
-            print(f"Вы назвали: {user_original}")
-            logging.info(f"Игрок: {user_original} (норм: {norm_user})")
-            last_moves.append(("Игрок", user_original, current_letter))
+            # Ввод корректен – выходим из цикла
             break
+
+        # Фиксируем время, затраченное на ввод
+        end_time = time.time()
+        turn_time = end_time - start_time
+        turn_times.append(turn_time)
+        total_player_time += turn_time
+        turn_number += 1
+
+        print(f"Время на этот ход: {turn_time:.2f} секунд")
+
+        user_original = cities1[norm_user]
+        used.add(norm_user)
+        fl = first(norm_user)
+        if fl in available and norm_user in available[fl]:
+            available[fl].remove(norm_user)
+
+        print(f"Вы назвали: {user_original}")
+        logging.info(f"Игрок: {user_original} (норм: {norm_user}) (время: {turn_time:.2f} сек)")
+        last_moves.append(("Игрок", user_original, current_letter))
 
         current_letter = last(norm_user)
         print(f"Компьютер думает... (нужна буква: {current_letter.upper()})")
@@ -172,6 +191,17 @@ def game(cities1, letter_map1):
 
         current_letter = last(comp_norm)
         print(f"Вам на букву: {current_letter.upper()}")
+
+    # После завершения игры выводим статистику по времени
+    if turn_times:
+        avg_time = total_player_time / len(turn_times)
+        print("\n--- Статистика времени игрока ---")
+        print(f"Всего ходов игрока: {turn_number}")
+        print(f"Суммарное время: {total_player_time:.2f} секунд")
+        print(f"Среднее время на ход: {avg_time:.2f} секунд")
+        logging.info(f"Статистика: ходов={turn_number}, сумма={total_player_time:.2f}, среднее={avg_time:.2f}")
+    else:
+        print("Игрок не сделал ни одного хода.")
 
 
 if __name__ == "__main__":
