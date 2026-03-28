@@ -23,6 +23,10 @@ logging.basicConfig(
 RUSSIAN_LETTERS = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 FORBIDDEN_CHARS = string.digits + string.punctuation
 
+# Константы для подсчёта очков
+BASE_SCORE = 100  # базовая стоимость одного хода
+MAX_TIME = 60  # максимальное время для учёта очков (секунд)
+
 
 def norm_city_name(name: str) -> str:
     name = name.lower().replace('ё', 'е')
@@ -42,6 +46,16 @@ def last(norm_name: str) -> str:
     if norm_name[-1] in ('ь', 'ъ', 'ы') and len(norm_name) > 1:
         return norm_name[-2]
     return norm_name[-1]
+
+
+def calculate_score(turn_time: float) -> int:
+    """Расчёт очков за один ход."""
+    # Если время больше максимального, используем максимальное
+    time_for_score = min(turn_time, MAX_TIME)
+    # Формула: 100 / (время + 1)
+    score = BASE_SCORE / (time_for_score + 1)
+    # Округляем до целого
+    return int(score)
 
 
 # Загрузка городов из JSON
@@ -105,21 +119,26 @@ def game(cities1, letter_map1):
     last_moves = deque(maxlen=5)
     last_moves.append(("Компьютер", first_city_orig, current_letter))
 
-    # Счётчики времени для будущих очков
-    turn_times = []          # список времени, затраченного на каждый ход игрока
-    total_player_time = 0    # суммарное время всех ходов игрока
-    turn_number = 0          # номер хода игрока (для информации)
+    # Счётчики для очков
+    turn_times = []  # список времени, затраченного на каждый ход игрока
+    turn_scores = []  # список очков за каждый ход
+    total_score = 0  # суммарное количество очков
+    turn_number = 0  # номер хода игрока (для информации)
 
     while True:
         # Ход игрока
         print("\n--- Ваш ход ---")
-        start_time = time.time()   # запускаем таймер перед вводом
+        start_time = time.time()  # запускаем таймер перед вводом
 
         while True:
             user_input = input("Ваш город (или 'сдаюсь', 'стоп', 'exit', 'quit' для выхода): ").strip()
             if user_input.lower() in ('сдаюсь', 'стоп', 'exit', 'quit'):
                 print("Вы сдались. Игра окончена.")
                 logging.info("Игрок сдался.")
+                print(f"\n--- ИТОГОВЫЙ РЕЗУЛЬТАТ ---")
+                print(f"Всего ходов: {turn_number}")
+                print(f"Всего очков: {total_score}")
+                logging.info(f"Итог: ходов={turn_number}, очков={total_score}")
                 sys.exit(0)
 
             if any(d in user_input for d in string.digits):
@@ -151,10 +170,15 @@ def game(cities1, letter_map1):
         end_time = time.time()
         turn_time = end_time - start_time
         turn_times.append(turn_time)
-        total_player_time += turn_time
+
+        # Рассчитываем очки за ход
+        turn_score = calculate_score(turn_time)
+        turn_scores.append(turn_score)
+        total_score += turn_score
         turn_number += 1
 
         print(f"Время на этот ход: {turn_time:.2f} секунд")
+        print(f"Очки за ход: {turn_score}")
 
         user_original = cities1[norm_user]
         used.add(norm_user)
@@ -163,7 +187,7 @@ def game(cities1, letter_map1):
             available[fl].remove(norm_user)
 
         print(f"Вы назвали: {user_original}")
-        logging.info(f"Игрок: {user_original} (норм: {norm_user}) (время: {turn_time:.2f} сек)")
+        logging.info(f"Игрок: {user_original} (норм: {norm_user}) (время: {turn_time:.2f} сек, очки: {turn_score})")
         last_moves.append(("Игрок", user_original, current_letter))
 
         current_letter = last(norm_user)
@@ -174,7 +198,7 @@ def game(cities1, letter_map1):
         possible = [c for c in possible if c not in used]
 
         if not possible:
-            print("Компьютер не может найти подходящий город. Вы победили!")
+            print("\nКомпьютер не может найти подходящий город. Вы победили!")
             logging.info("Компьютер проиграл. Игрок победил.")
             break
 
@@ -192,16 +216,52 @@ def game(cities1, letter_map1):
         current_letter = last(comp_norm)
         print(f"Вам на букву: {current_letter.upper()}")
 
-    # После завершения игры выводим статистику по времени
+    # После завершения игры выводим статистику
+    print("\n" + "=" * 50)
+    print("--- ИТОГОВАЯ СТАТИСТИКА ---")
+    print(f"Всего ходов игрока: {turn_number}")
+    print(f"Всего очков: {total_score}")
+
     if turn_times:
-        avg_time = total_player_time / len(turn_times)
-        print("\n--- Статистика времени игрока ---")
-        print(f"Всего ходов игрока: {turn_number}")
-        print(f"Суммарное время: {total_player_time:.2f} секунд")
+        avg_time = sum(turn_times) / len(turn_times)
+        avg_score = sum(turn_scores) / len(turn_scores)
+        print(f"Суммарное время: {sum(turn_times):.2f} секунд")
         print(f"Среднее время на ход: {avg_time:.2f} секунд")
-        logging.info(f"Статистика: ходов={turn_number}, сумма={total_player_time:.2f}, среднее={avg_time:.2f}")
+        print(f"Среднее количество очков за ход: {avg_score:.2f}")
+        print(f"Максимальное количество очков за ход: {max(turn_scores)}")
+        print(f"Минимальное количество очков за ход: {min(turn_scores)}")
+
+        logging.info(f"Итоговая статистика: ходов={turn_number}, очков={total_score}, "
+                     f"суммарное время={sum(turn_times):.2f}, среднее время={avg_time:.2f}, "
+                     f"средний счёт={avg_score:.2f}, макс={max(turn_scores)}, мин={min(turn_scores)}")
     else:
         print("Игрок не сделал ни одного хода.")
+
+    # Сохраняем результат в файл рейтинга
+    rating_file = Path("rating.json")
+    rating_data = []
+
+    if rating_file.exists():
+        with open(rating_file, 'r', encoding='utf-8') as f:
+            rating_data = json.load(f)
+
+    rating_entry = {
+        "date": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "score": total_score,
+        "turns": turn_number,
+        "total_time": sum(turn_times) if turn_times else 0,
+        "mode": "классический"
+    }
+    rating_data.append(rating_entry)
+
+    # Сортируем по убыванию очков
+    rating_data.sort(key=lambda x: x["score"], reverse=True)
+
+    with open(rating_file, 'w', encoding='utf-8') as f:
+        json.dump(rating_data, f, ensure_ascii=False, indent=2)
+
+    print(f"\nРезультат сохранён в файл {rating_file}")
+    print("=" * 50)
 
 
 if __name__ == "__main__":
