@@ -1,53 +1,46 @@
-import PyQt5, PyQt6, PySide6
 import sys
 import json
 import random
 import re
 import unicodedata
 import string
-import logging
-from pathlib import Path
-import os
-from collections import defaultdict, deque
 import time
-import threading
+from pathlib import Path
+from collections import defaultdict, deque
 
-log_dir = Path("logs")
-os.makedirs(log_dir, exist_ok=True)
-logging.basicConfig(
-    filename=log_dir / "game.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    encoding="utf-8"
-)
+# Попытка импорта PyQt5, затем PyQt6, затем PySide6
+try:
+    from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                                 QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                                 QDialog, QTableWidget, QTableWidgetItem,
+                                 QHeaderView, QTextEdit, QMessageBox, QListWidget)
+    from PyQt5.QtCore import Qt, QTimer
+    from PyQt5.QtGui import QFont
+    QT_LIB = 'PyQt5'
+except ImportError:
+    try:
+        from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                                     QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                                     QDialog, QTableWidget, QTableWidgetItem,
+                                     QHeaderView, QTextEdit, QMessageBox, QListWidget)
+        from PyQt6.QtCore import Qt, QTimer
+        from PyQt6.QtGui import QFont
+        QT_LIB = 'PyQt6'
+    except ImportError:
+        from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                                       QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                                       QDialog, QTableWidget, QTableWidgetItem,
+                                       QHeaderView, QTextEdit, QMessageBox, QListWidget)
+        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtGui import QFont
+        QT_LIB = 'PySide6'
 
+# ---------- Константы и утилиты ----------
 RUSSIAN_LETTERS = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 FORBIDDEN_CHARS = string.digits + string.punctuation
-
-# Константы для подсчёта очков
-BASE_SCORE = 100  # базовая стоимость одного хода
-MAX_TIME = 60  # максимальное время для учёта очков (секунд)
-SUPER_TIME_LIMIT = 30  # ограничение времени на ход в супер-режиме (секунд)
-
-
-def input_with_timeout(prompt: str, timeout: int) -> str | None:
-    """Ввод с таймаутом. Возвращает введённую строку или None, если время истекло."""
-    result = [None]
-
-    def get_input():
-        try:
-            result[0] = input(prompt)
-        except EOFError:
-            result[0] = None
-
-    t = threading.Thread(target=get_input)
-    t.daemon = True
-    t.start()
-    t.join(timeout)
-    if t.is_alive():
-        print("\nВремя вышло!")
-        return None
-    return result[0]
+BASE_SCORE = 100
+MAX_TIME = 60
+SUPER_TIME_LIMIT = 30
 
 
 def norm_city_name(name: str) -> str:
@@ -70,14 +63,12 @@ def last(norm_name: str) -> str:
 
 
 def calculate_score(turn_time: float) -> int:
-    """Расчёт очков за один ход."""
     time_for_score = min(turn_time, MAX_TIME)
     score = BASE_SCORE / (time_for_score + 1)
     return int(score)
 
 
-# Загрузка городов из JSON
-def load(json_path: str):
+def load_cities(json_path: str):
     json_path = Path(json_path)
     if not json_path.exists():
         sample_cities = [
@@ -93,247 +84,471 @@ def load(json_path: str):
         ]
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(sample_cities, f, ensure_ascii=False, indent=2)
-        logging.info(f"Создан файл с городами: {json_path}")
 
     with open(json_path, 'r', encoding='utf-8') as f:
         raw_cities = json.load(f)
 
-    cities1 = {}
-    letter_map1 = defaultdict(list)
+    cities_dict = {}
+    letter_map = defaultdict(list)
 
     for original in raw_cities:
         norm = norm_city_name(original)
         if not norm:
             continue
-        if norm in cities1:
+        if norm in cities_dict:
             continue
-        cities1[norm] = original
+        cities_dict[norm] = original
         first_letter = first(norm)
-        letter_map1[first_letter].append(norm)
+        letter_map[first_letter].append(norm)
 
-    logging.info(f"Загружено {len(cities1)} уникальных городов.")
-    return cities1, letter_map1
+    return cities_dict, letter_map
 
 
-# игровая логика
-def game(cities1, letter_map1, mode='classic'):
-    used = set()
-    available = {letter: list(names) for letter, names in letter_map1.items()}
+# ---------- Логика игры ----------
+class GameLogic:
+    def __init__(self, cities_file):
+        self.cities, self.letter_map = load_cities(cities_file)
+        self.reset_state()
 
-    first_city_norm = random.choice(list(cities1.keys()))
-    first_city_orig = cities1[first_city_norm]
+    def reset_state(self):
+        self.used = set()
+        available = {letter: list(names) for letter, names in self.letter_map.items()}
+        self.available = available
+        self.current_letter = None
+        self.last_moves = deque(maxlen=10)
+        self.total_score = 0
+        self.turn_number = 0
+        self.game_over = False
 
-    used.add(first_city_norm)
-    first_letter = first(first_city_norm)
-    if first_letter in available and first_city_norm in available[first_letter]:
-        available[first_letter].remove(first_city_norm)
+    def start(self, mode):
+        self.mode = mode
+        self.reset_state()
+        if not self.cities:
+            return None, None
+        first_norm = random.choice(list(self.cities.keys()))
+        first_orig = self.cities[first_norm]
+        self.used.add(first_norm)
+        first_letter = first(first_norm)
+        if first_letter in self.available and first_norm in self.available[first_letter]:
+            self.available[first_letter].remove(first_norm)
+        self.current_letter = last(first_norm)
+        self.last_moves.append(("Компьютер", first_orig, self.current_letter))
+        return first_orig, self.current_letter
 
-    print(f"Компьютер начинает: {first_city_orig}")
-    logging.info(f"Компьютер: {first_city_orig} (норм: {first_city_norm})")
+    def get_initial_city_and_letter(self):
+        if self.last_moves:
+            return self.last_moves[0][1], self.current_letter
+        return None, None
 
-    current_letter = last(first_city_norm)
-    print(f"Вам на букву: {current_letter.upper()}")
+    def process_player_city(self, city_input, turn_time):
+        norm = norm_city_name(city_input)
+        if not norm:
+            return False, "Некорректное название города.", 0
+        if norm not in self.cities:
+            return False, "Такого города нет в списке.", 0
+        if norm in self.used:
+            return False, "Этот город уже был использован.", 0
+        if first(norm) != self.current_letter:
+            return False, f"Город должен начинаться на букву '{self.current_letter.upper()}'.", 0
 
-    if mode == 'super':
-        print(f"Режим «Супер-города»: на ход даётся {SUPER_TIME_LIMIT} секунд.")
-        print("Города не должны повторяться.")
-    else:
-        print("Классический режим.")
+        score = calculate_score(turn_time)
+        self.total_score += score
+        self.turn_number += 1
+        user_original = self.cities[norm]
+        self.used.add(norm)
+        fl = first(norm)
+        if fl in self.available and norm in self.available[fl]:
+            self.available[fl].remove(norm)
 
-    last_moves = deque(maxlen=5)
-    last_moves.append(("Компьютер", first_city_orig, current_letter))
+        self.current_letter = last(norm)
+        self.last_moves.append(("Игрок", user_original, self.current_letter))
+        return True, "", score
 
-    # Счётчики для очков
-    turn_times = []
-    turn_scores = []
-    total_score = 0
-    turn_number = 0
+    def computer_move(self):
+        possible = self.available.get(self.current_letter, [])
+        possible = [c for c in possible if c not in self.used]
+        if not possible:
+            self.game_over = True
+            return None, False
+        comp_norm = random.choice(possible)
+        comp_orig = self.cities[comp_norm]
+        self.used.add(comp_norm)
+        fl = first(comp_norm)
+        if fl in self.available and comp_norm in self.available[fl]:
+            self.available[fl].remove(comp_norm)
+        self.current_letter = last(comp_norm)
+        self.last_moves.append(("Компьютер", comp_orig, self.current_letter))
+        return comp_orig, True
 
-    while True:
-        # Ход игрока
-        print("\n--- Ваш ход ---")
-        start_time = time.time()
+    def save_rating(self, mode):
+        rating_file = Path("rating.json")
+        rating_data = []
+        if rating_file.exists():
+            with open(rating_file, 'r', encoding='utf-8') as f:
+                rating_data = json.load(f)
+        entry = {
+            "date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "score": self.total_score,
+            "mode": mode
+        }
+        rating_data.append(entry)
+        rating_data.sort(key=lambda x: x["score"], reverse=True)
+        with open(rating_file, 'w', encoding='utf-8') as f:
+            json.dump(rating_data, f, ensure_ascii=False, indent=2)
 
-        # Ввод с возможным ограничением времени
-        if mode == 'super':
-            user_input = input_with_timeout(
-                f"Ваш город (или 'сдаюсь', 'стоп', 'exit', 'quit' для выхода) [осталось {SUPER_TIME_LIMIT} сек]: ",
-                SUPER_TIME_LIMIT
-            )
-            if user_input is None:
-                print("Вы не уложились в отведённое время. Игра окончена.")
-                logging.info("Игрок превысил лимит времени (супер-режим).")
-                print(f"\n--- ИТОГОВЫЙ РЕЗУЛЬТАТ ---")
-                print(f"Всего ходов: {turn_number}")
-                print(f"Всего очков: {total_score}")
-                logging.info(f"Итог: ходов={turn_number}, очков={total_score}")
-                sys.exit(0)
+
+# ---------- Окна GUI ----------
+class MainMenu(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Игра «Города»")
+        self.setMinimumSize(800, 600)
+        self.init_ui()
+        self.apply_style()
+
+    def init_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel("Игра «Города»")
+        title.setFont(QFont("Arial", 24, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        btn_classic = QPushButton("Классический режим")
+        btn_super = QPushButton("Режим «Супер-города»")
+        btn_rating = QPushButton("Рейтинг")
+        btn_exit = QPushButton("Выход")
+
+        for btn in (btn_classic, btn_super, btn_rating, btn_exit):
+            btn.setMinimumHeight(40)
+            layout.addWidget(btn)
+
+        btn_classic.clicked.connect(lambda: self.start_game('classic'))
+        btn_super.clicked.connect(lambda: self.start_game('super'))
+        btn_rating.clicked.connect(self.show_rating)
+        btn_exit.clicked.connect(self.close)
+
+        layout.addStretch()
+
+    def start_game(self, mode):
+        game_dialog = GameDialog(mode, self)
+        game_dialog.exec_()  # модальный диалог
+
+    def show_rating(self):
+        rating_dialog = RatingDialog(self)
+        rating_dialog.exec_()
+
+    def apply_style(self):
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f0f0f0;
+            }
+            QLabel {
+                color: #333;
+            }
+            QPushButton {
+                background-color: #e0e0e0;
+                border: 1px solid #aaa;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+            }
+            QPushButton:pressed {
+                background-color: #b0b0b0;
+            }
+        """)
+
+
+class GameDialog(QDialog):
+    def __init__(self, mode, parent=None):
+        super().__init__(parent)
+        self.mode = mode
+        self.logic = GameLogic('cities.json')
+        self.player_start_time = None
+        self.remaining_time = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_timer)
+
+        self.setWindowTitle("Игра «Города»" if mode == 'classic' else "Супер-города")
+        self.setMinimumSize(800, 600)
+        self.init_ui()
+        self.start_new_game()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Верхняя панель: время, очки, кнопка правил
+        top_layout = QHBoxLayout()
+        self.label_time = QLabel("Время: —")
+        self.label_score = QLabel("Очки: 0")
+        self.label_time.setFont(QFont("Arial", 12))
+        self.label_score.setFont(QFont("Arial", 12))
+        top_layout.addWidget(self.label_time)
+        top_layout.addWidget(self.label_score)
+        top_layout.addStretch()
+        btn_rules = QPushButton("Правила")
+        btn_rules.clicked.connect(self.show_rules)
+        top_layout.addWidget(btn_rules)
+        layout.addLayout(top_layout)
+
+        # Информация о последнем ходе компьютера
+        self.label_round = QLabel()
+        self.label_round.setFont(QFont("Arial", 14))
+        self.label_round.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.label_round)
+
+        # Поле ввода и кнопка
+        input_layout = QHBoxLayout()
+        self.line_edit = QLineEdit()
+        self.line_edit.setPlaceholderText("Введите город")
+        self.line_edit.returnPressed.connect(self.submit_city)
+        self.btn_submit = QPushButton("Ответить")
+        self.btn_submit.clicked.connect(self.submit_city)
+        input_layout.addWidget(self.line_edit)
+        input_layout.addWidget(self.btn_submit)
+        layout.addLayout(input_layout)
+
+        # История
+        layout.addWidget(QLabel("Последние 10 городов:"))
+        self.list_history = QListWidget()
+        self.list_history.setMaximumHeight(200)
+        layout.addWidget(self.list_history)
+
+        # Кнопка выхода
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch()
+        btn_exit = QPushButton("Выход")
+        btn_exit.clicked.connect(self.exit_game)
+        bottom_layout.addWidget(btn_exit)
+        layout.addLayout(bottom_layout)
+
+        self.apply_style()
+
+    def apply_style(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f5f5f5;
+            }
+            QPushButton {
+                background-color: #e0e0e0;
+                border: 1px solid #aaa;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+            }
+            QLineEdit {
+                padding: 6px;
+                font-size: 14px;
+            }
+            QLabel {
+                color: #333;
+            }
+        """)
+
+    def start_new_game(self):
+        first_orig, letter = self.logic.start(self.mode)
+        if not first_orig:
+            QMessageBox.critical(self, "Ошибка", "Список городов пуст.")
+            self.reject()
+            return
+        self.label_round.setText(f"Компьютер назвал: {first_orig}\nВам на букву: {letter.upper()}")
+        self.list_history.clear()
+        self.list_history.addItem(f"Компьютер: {first_orig}")
+        self.label_score.setText("Очки: 0")
+        self.start_player_turn()
+
+    def start_player_turn(self):
+        self.player_start_time = time.time()
+        self.line_edit.clear()
+        self.line_edit.setFocus()
+        if self.mode == 'super':
+            self.remaining_time = SUPER_TIME_LIMIT
+            self.label_time.setText(f"Осталось: {self.remaining_time} сек")
+            self.timer.start(1000)
         else:
-            user_input = input("Ваш город (или 'сдаюсь', 'стоп', 'exit', 'quit' для выхода): ").strip()
+            self.label_time.setText("Время: классический режим")
+            self.timer.stop()
 
-        # Обработка команд выхода
-        if user_input is not None and user_input.lower() in ('сдаюсь', 'стоп', 'exit', 'quit'):
-            print("Вы сдались. Игра окончена.")
-            logging.info("Игрок сдался.")
-            print(f"\n--- ИТОГОВЫЙ РЕЗУЛЬТАТ ---")
-            print(f"Всего ходов: {turn_number}")
-            print(f"Всего очков: {total_score}")
-            logging.info(f"Итог: ходов={turn_number}, очков={total_score}")
-            sys.exit(0)
+    def update_timer(self):
+        self.remaining_time -= 1
+        self.label_time.setText(f"Осталось: {self.remaining_time} сек")
+        if self.remaining_time <= 0:
+            self.timer.stop()
+            QMessageBox.information(self, "Время вышло", "Время на ход истекло.")
+            self.finish_game()
 
-        # Проверки корректности названия
-        if user_input is None:
-            continue  # на всякий случай, но не должно произойти
-        user_input = user_input.strip()
+    def submit_city(self):
+        if self.logic.game_over:
+            return
+        city = self.line_edit.text().strip()
+        if not city:
+            return
+        # Остановить таймер
+        if self.mode == 'super':
+            self.timer.stop()
+            elapsed = time.time() - self.player_start_time
+        else:
+            elapsed = time.time() - self.player_start_time
 
-        if any(d in user_input for d in string.digits):
-            print("Название города не должно содержать цифр. Попробуйте снова.")
-            continue
+        valid, message, score = self.logic.process_player_city(city, elapsed)
+        if not valid:
+            QMessageBox.warning(self, "Ошибка", message)
+            # Продолжить таймер, если не истекло время
+            if self.mode == 'super' and self.remaining_time > 0:
+                self.timer.start(1000)
+            return
 
-        norm_user = norm_city_name(user_input)
-        if not norm_user:
-            print("Некорректное название (после нормализации пусто). Попробуйте снова.")
-            continue
-
-        if norm_user not in cities1:
-            print("Такого города нет в списке. Попробуйте другой.")
-            logging.info(f"Игрок ввёл несуществующий город: {user_input}")
-            continue
-
-        if norm_user in used:
-            print("Этот город уже был. Выберите другой.")
-            continue
-
-        if first(norm_user) != current_letter:
-            print(f"Город должен начинаться на букву '{current_letter.upper()}'. Попробуйте снова.")
-            continue
-
-        # Ввод корректен – фиксируем время
-        end_time = time.time()
-        turn_time = end_time - start_time
-        turn_times.append(turn_time)
-
-        # Рассчитываем очки
-        turn_score = calculate_score(turn_time)
-        turn_scores.append(turn_score)
-        total_score += turn_score
-        turn_number += 1
-
-        print(f"Время на этот ход: {turn_time:.2f} секунд")
-        print(f"Очки за ход: {turn_score}")
-
-        user_original = cities1[norm_user]
-        used.add(norm_user)
-        fl = first(norm_user)
-        if fl in available and norm_user in available[fl]:
-            available[fl].remove(norm_user)
-
-        print(f"Вы назвали: {user_original}")
-        logging.info(f"Игрок: {user_original} (норм: {norm_user}) (время: {turn_time:.2f} сек, очки: {turn_score})")
-        last_moves.append(("Игрок", user_original, current_letter))
-
-        current_letter = last(norm_user)
-        print(f"Компьютер думает... (нужна буква: {current_letter.upper()})")
+        # Успешный ход игрока
+        self.label_score.setText(f"Очки: {self.logic.total_score}")
+        self.list_history.addItem(f"Вы: {city} (+{score})")
 
         # Ход компьютера
-        possible = available.get(current_letter, [])
-        possible = [c for c in possible if c not in used]
+        comp_city, can_move = self.logic.computer_move()
+        if not can_move:
+            QMessageBox.information(self, "Победа!",
+                                    f"Компьютер не может назвать город. Вы выиграли!\nВаши очки: {self.logic.total_score}")
+            self.finish_game()
+            return
 
-        if not possible:
-            print("\nКомпьютер не может найти подходящий город. Вы победили!")
-            logging.info("Компьютер проиграл. Игрок победил.")
-            break
+        self.list_history.addItem(f"Компьютер: {comp_city}")
+        self.label_round.setText(f"Компьютер назвал: {comp_city}\nВам на букву: {self.logic.current_letter.upper()}")
+        self.start_player_turn()
 
-        comp_norm = random.choice(possible)
-        comp_orig = cities1[comp_norm]
-        used.add(comp_norm)
-        fl = first(comp_norm)
-        if fl in available and comp_norm in available[fl]:
-            available[fl].remove(comp_norm)
-
-        print(f"Компьютер отвечает: {comp_orig}")
-        logging.info(f"Компьютер: {comp_orig} (норм: {comp_norm})")
-        last_moves.append(("Компьютер", comp_orig, current_letter))
-
-        current_letter = last(comp_norm)
-        print(f"Вам на букву: {current_letter.upper()}")
-
-    # Итоговая статистика
-    print("\n" + "=" * 50)
-    print("--- ИТОГОВАЯ СТАТИСТИКА ---")
-    print(f"Всего ходов игрока: {turn_number}")
-    print(f"Всего очков: {total_score}")
-
-    if turn_times:
-        avg_time = sum(turn_times) / len(turn_times)
-        avg_score = sum(turn_scores) / len(turn_scores)
-        print(f"Суммарное время: {sum(turn_times):.2f} секунд")
-        print(f"Среднее время на ход: {avg_time:.2f} секунд")
-        print(f"Среднее количество очков за ход: {avg_score:.2f}")
-        print(f"Максимальное количество очков за ход: {max(turn_scores)}")
-        print(f"Минимальное количество очков за ход: {min(turn_scores)}")
-
-        logging.info(f"Итоговая статистика: ходов={turn_number}, очков={total_score}, "
-                     f"суммарное время={sum(turn_times):.2f}, среднее время={avg_time:.2f}, "
-                     f"средний счёт={avg_score:.2f}, макс={max(turn_scores)}, мин={min(turn_scores)}")
-    else:
-        print("Игрок не сделал ни одного хода.")
-
-    # Сохранение рейтинга
-    rating_file = Path("rating.json")
-    rating_data = []
-
-    if rating_file.exists():
-        with open(rating_file, 'r', encoding='utf-8') as f:
-            rating_data = json.load(f)
-
-    rating_entry = {
-        "date": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "score": total_score,
-        "turns": turn_number,
-        "total_time": sum(turn_times) if turn_times else 0,
-        "mode": mode
-    }
-    rating_data.append(rating_entry)
-
-    rating_data.sort(key=lambda x: x["score"], reverse=True)
-
-    with open(rating_file, 'w', encoding='utf-8') as f:
-        json.dump(rating_data, f, ensure_ascii=False, indent=2)
-
-    print(f"\nРезультат сохранён в файл {rating_file}")
-    print("=" * 50)
-
-
-if __name__ == "__main__":
-    cities_file = Path("cities.json")
-    if not os.path.exists(cities_file):
-        print("Создан файл из примера")
-
-    cities1, letter_map1 = load(cities_file)
-    if not cities1:
-        print("Список городов пуст. Игра невозможна.")
-        sys.exit(1)
-
-    # Выбор режима
-    print("Добро пожаловать в игру «Города»!")
-    while True:
-        choice = input(
-            "Выберите режим:\n1 - Классический\n2 - Супер-города (ограничение по времени, без повторов)\nВаш выбор: ").strip()
-        if choice == '1':
-            mode = 'classic'
-            break
-        elif choice == '2':
-            mode = 'super'
-            break
+    def exit_game(self):
+        reply = QMessageBox.question(self, "Выход", "Сохранить текущий результат?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.finish_game()
         else:
-            print("Пожалуйста, введите 1 или 2.")
+            self.reject()
 
-    random.seed()
+    def finish_game(self):
+        if not self.logic.game_over:
+            self.logic.game_over = True
+        self.logic.save_rating(self.mode)
+        self.accept()
 
-    try:
-        game(cities1, letter_map1, mode=mode)
-    except KeyboardInterrupt:
-        print("\nИгра прервана пользователем.")
-        logging.info("Игра прервана по Ctrl+C")
-        sys.exit(0)
+    def show_rules(self):
+        rules_dialog = RulesDialog(self)
+        rules_dialog.exec_()
+
+
+class RatingDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Рейтинг")
+        self.setMinimumSize(600, 400)
+        layout = QVBoxLayout(self)
+
+        # Кнопка выхода в правом верхнем углу
+        top_layout = QHBoxLayout()
+        top_layout.addStretch()
+        btn_exit = QPushButton("Выход")
+        btn_exit.clicked.connect(self.close)
+        top_layout.addWidget(btn_exit)
+        layout.addLayout(top_layout)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Дата", "Очки", "Режим"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.table)
+        self.load_data()
+
+        self.apply_style()
+
+    def apply_style(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f5f5f5;
+            }
+            QPushButton {
+                background-color: #e0e0e0;
+                border: 1px solid #aaa;
+                border-radius: 4px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+            }
+        """)
+
+    def load_data(self):
+        rating_file = Path("rating.json")
+        if not rating_file.exists():
+            return
+        with open(rating_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        self.table.setRowCount(len(data))
+        for i, entry in enumerate(data):
+            self.table.setItem(i, 0, QTableWidgetItem(entry.get("date", "")))
+            self.table.setItem(i, 1, QTableWidgetItem(str(entry.get("score", 0))))
+            self.table.setItem(i, 2, QTableWidgetItem(entry.get("mode", "")))
+
+
+class RulesDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Правила")
+        self.setMinimumSize(600, 400)
+        layout = QVBoxLayout(self)
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(
+            "Правила игры «Города»:\n\n"
+            "1. Компьютер называет город. Игрок должен назвать город, начинающийся на последнюю букву города компьютера.\n"
+            "2. В классическом режиме ограничений по времени нет. В режиме «Супер-города» на ход даётся 30 секунд, "
+            "города не должны повторяться.\n"
+            "3. Нельзя использовать города, которых нет в списке, или которые уже были названы.\n"
+            "4. Очки начисляются за быстрый ответ: чем быстрее ответ, тем больше очков (базовая стоимость 100 очков).\n"
+            "5. Игра продолжается, пока компьютер не сможет найти подходящий город — в этом случае побеждает игрок.\n"
+            "6. При выходе результат сохраняется в таблицу рейтинга.\n"
+        )
+        layout.addWidget(text)
+
+        btn_back = QPushButton("Назад")
+        btn_back.clicked.connect(self.close)
+        layout.addWidget(btn_back, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self.apply_style()
+
+    def apply_style(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f5f5f5;
+            }
+            QPushButton {
+                background-color: #e0e0e0;
+                border: 1px solid #aaa;
+                border-radius: 4px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+            }
+        """)
+
+
+# ---------- Запуск ----------
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion')
+    # Общий стиль для всех окон
+    app.setStyleSheet("""
+        QWidget {
+            font-family: 'Segoe UI', Arial, sans-serif;
+        }
+    """)
+    main_menu = MainMenu()
+    main_menu.show()
+    sys.exit(app.exec_())
