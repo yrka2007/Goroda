@@ -57,7 +57,8 @@ def first(norm_name: str) -> str:
 def last(norm_name: str) -> str:
     if not norm_name:
         return ''
-    if norm_name[-1] in ('ь', 'ъ', 'ы') and len(norm_name) > 1:
+    # Й добавлена в исключения
+    if norm_name[-1] in ('ь', 'ъ', 'ы', 'й') and len(norm_name) > 1:
         return norm_name[-2]
     return norm_name[-1]
 
