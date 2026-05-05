@@ -5,38 +5,16 @@ import re
 import unicodedata
 import string
 import time
+import os
 from pathlib import Path
 from collections import defaultdict, deque
 
-# Попытка импорта PyQt5, затем PyQt6, затем PySide6
-try:
-    from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                                 QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                                 QDialog, QTableWidget, QTableWidgetItem,
-                                 QHeaderView, QTextEdit, QMessageBox, QListWidget)
-    from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtGui import QFont
-
-    QT_LIB = 'PyQt5'
-except ImportError:
-    try:
-        from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                                     QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                                     QDialog, QTableWidget, QTableWidgetItem,
-                                     QHeaderView, QTextEdit, QMessageBox, QListWidget)
-        from PyQt6.QtCore import Qt, QTimer
-        from PyQt6.QtGui import QFont
-
-        QT_LIB = 'PyQt6'
-    except ImportError:
-        from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                                       QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                                       QDialog, QTableWidget, QTableWidgetItem,
-                                       QHeaderView, QTextEdit, QMessageBox, QListWidget)
-        from PySide6.QtCore import Qt, QTimer
-        from PySide6.QtGui import QFont
-
-        QT_LIB = 'PySide6'
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                             QDialog, QTableWidget, QTableWidgetItem,
+                             QHeaderView, QTextEdit, QMessageBox, QListWidget)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFont
 
 # ---------- Константы и утилиты ----------
 RUSSIAN_LETTERS = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
@@ -107,6 +85,15 @@ def load_cities(json_path: str):
     return cities_dict, letter_map
 
 
+def get_writable_path(filename):
+    """Путь для записи файлов"""
+    if getattr(sys, 'frozen', False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, filename)
+
+
 # ---------- Логика игры ----------
 class GameLogic:
     def __init__(self, cities_file):
@@ -137,11 +124,6 @@ class GameLogic:
         self.current_letter = last(first_norm)
         self.last_moves.append(("Компьютер", first_orig, self.current_letter))
         return first_orig, self.current_letter
-
-    def get_initial_city_and_letter(self):
-        if self.last_moves:
-            return self.last_moves[0][1], self.current_letter
-        return None, None
 
     def process_player_city(self, city_input, turn_time):
         norm = norm_city_name(city_input)
@@ -184,9 +166,9 @@ class GameLogic:
         return comp_orig, True
 
     def save_rating(self, mode):
-        rating_file = Path("rating.json")
+        rating_file = get_writable_path("rating.json")
         rating_data = []
-        if rating_file.exists():
+        if os.path.exists(rating_file):
             with open(rating_file, 'r', encoding='utf-8') as f:
                 rating_data = json.load(f)
         entry = {
@@ -213,11 +195,11 @@ class MainMenu(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setAlignment(Qt.AlignCenter)
 
         title = QLabel("Игра «Города»")
-        title.setFont(QFont("Arial", 24, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setFont(QFont("Arial", 24, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
         btn_classic = QPushButton("Классический режим")
@@ -238,7 +220,7 @@ class MainMenu(QMainWindow):
 
     def start_game(self, mode):
         game_dialog = GameDialog(mode, self)
-        game_dialog.exec_()  # модальный диалог
+        game_dialog.exec_()
 
     def show_rating(self):
         rating_dialog = RatingDialog(self)
@@ -275,13 +257,13 @@ class GameDialog(QDialog):
         self.logic = GameLogic('cities.json')
         self.player_start_time = None
         self.remaining_time = 0
-        self.elapsed_time = 0  # для классического режима
+        self.elapsed_time = 0
 
-        # Таймер для супер-режима (обратный отсчёт)
+        # Таймер для супер-режима
         self.super_timer = QTimer(self)
         self.super_timer.timeout.connect(self.update_super_timer)
 
-        # Таймер для классического режима (прямой счёт)
+        # Таймер для классического режима
         self.classic_timer = QTimer(self)
         self.classic_timer.timeout.connect(self.update_classic_timer)
 
@@ -293,13 +275,11 @@ class GameDialog(QDialog):
     def init_ui(self):
         layout = QVBoxLayout(self)
 
-        # Верхняя панель: время, очки, кнопка правил
         top_layout = QHBoxLayout()
 
-        # Счётчик времени с крупным шрифтом
         self.label_time = QLabel()
-        self.label_time.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.label_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_time.setFont(QFont("Arial", 16, QFont.Bold))
+        self.label_time.setAlignment(Qt.AlignCenter)
         self.label_time.setMinimumWidth(200)
 
         self.label_score = QLabel("Очки: 0")
@@ -314,13 +294,11 @@ class GameDialog(QDialog):
         top_layout.addWidget(btn_rules)
         layout.addLayout(top_layout)
 
-        # Информация о последнем ходе компьютера
         self.label_round = QLabel()
         self.label_round.setFont(QFont("Arial", 14))
-        self.label_round.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_round.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.label_round)
 
-        # Поле ввода и кнопка
         input_layout = QHBoxLayout()
         self.line_edit = QLineEdit()
         self.line_edit.setPlaceholderText("Введите город")
@@ -331,13 +309,11 @@ class GameDialog(QDialog):
         input_layout.addWidget(self.btn_submit)
         layout.addLayout(input_layout)
 
-        # История
         layout.addWidget(QLabel("Последние 10 городов:"))
         self.list_history = QListWidget()
         self.list_history.setMaximumHeight(200)
         layout.addWidget(self.list_history)
 
-        # Кнопка выхода
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
         btn_exit = QPushButton("Выход")
@@ -389,25 +365,21 @@ class GameDialog(QDialog):
         self.line_edit.setFocus()
 
         if self.mode == 'super':
-            # Супер-режим: обратный отсчёт от 30 секунд
             self.remaining_time = SUPER_TIME_LIMIT
             self.label_time.setText(f"⏱ {self.remaining_time} сек")
             self.label_time.setStyleSheet("color: #333;")
-            self.super_timer.start(1000)  # обновление каждую секунду
+            self.super_timer.start(1000)
             self.classic_timer.stop()
         else:
-            # Классический режим: прямой счёт времени
             self.elapsed_time = 0
             self.label_time.setText(f"⏱ 00:00")
             self.label_time.setStyleSheet("color: #333;")
-            self.classic_timer.start(1000)  # обновление каждую секунду
+            self.classic_timer.start(1000)
             self.super_timer.stop()
 
     def update_super_timer(self):
-        """Обновление таймера в супер-режиме (обратный отсчёт)"""
         self.remaining_time -= 1
 
-        # Меняем цвет когда осталось мало времени
         if self.remaining_time <= 5:
             self.label_time.setStyleSheet("color: red; font-weight: bold;")
         elif self.remaining_time <= 10:
@@ -422,7 +394,6 @@ class GameDialog(QDialog):
             self.finish_game()
 
     def update_classic_timer(self):
-        """Обновление таймера в классическом режиме (прямой счёт)"""
         self.elapsed_time += 1
         minutes = self.elapsed_time // 60
         seconds = self.elapsed_time % 60
@@ -436,7 +407,6 @@ class GameDialog(QDialog):
         if not city:
             return
 
-        # Останавливаем таймеры
         self.super_timer.stop()
         self.classic_timer.stop()
 
@@ -445,18 +415,15 @@ class GameDialog(QDialog):
         valid, message, score = self.logic.process_player_city(city, elapsed)
         if not valid:
             QMessageBox.warning(self, "Ошибка", message)
-            # Продолжаем таймер, если не истекло время
             if self.mode == 'super' and self.remaining_time > 0:
                 self.super_timer.start(1000)
             elif self.mode == 'classic':
                 self.classic_timer.start(1000)
             return
 
-        # Успешный ход игрока
         self.label_score.setText(f"Очки: {self.logic.total_score}")
         self.list_history.addItem(f"Вы: {city} (+{score} очков, {elapsed:.1f}с)")
 
-        # Ход компьютера
         comp_city, can_move = self.logic.computer_move()
         if not can_move:
             self.super_timer.stop()
@@ -473,8 +440,8 @@ class GameDialog(QDialog):
 
     def exit_game(self):
         reply = QMessageBox.question(self, "Выход", "Сохранить текущий результат?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
             self.finish_game()
         else:
             self.reject()
@@ -499,7 +466,6 @@ class RatingDialog(QDialog):
         self.setMinimumSize(600, 400)
         layout = QVBoxLayout(self)
 
-        # Кнопка выхода в правом верхнем углу
         top_layout = QHBoxLayout()
         top_layout.addStretch()
         btn_exit = QPushButton("Выход")
@@ -510,7 +476,7 @@ class RatingDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["Дата", "Очки", "Режим"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.table)
         self.load_data()
 
@@ -533,8 +499,8 @@ class RatingDialog(QDialog):
         """)
 
     def load_data(self):
-        rating_file = Path("rating.json")
-        if not rating_file.exists():
+        rating_file = get_writable_path("rating.json")
+        if not os.path.exists(rating_file):
             return
         with open(rating_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -568,7 +534,7 @@ class RulesDialog(QDialog):
 
         btn_back = QPushButton("Назад")
         btn_back.clicked.connect(self.close)
-        layout.addWidget(btn_back, alignment=Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(btn_back, alignment=Qt.AlignRight)
 
         self.apply_style()
 
@@ -593,7 +559,6 @@ class RulesDialog(QDialog):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
-    # Общий стиль для всех окон
     app.setStyleSheet("""
         QWidget {
             font-family: 'Segoe UI', Arial, sans-serif;
