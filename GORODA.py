@@ -16,6 +16,7 @@ try:
                                  QHeaderView, QTextEdit, QMessageBox, QListWidget)
     from PyQt5.QtCore import Qt, QTimer
     from PyQt5.QtGui import QFont
+
     QT_LIB = 'PyQt5'
 except ImportError:
     try:
@@ -25,6 +26,7 @@ except ImportError:
                                      QHeaderView, QTextEdit, QMessageBox, QListWidget)
         from PyQt6.QtCore import Qt, QTimer
         from PyQt6.QtGui import QFont
+
         QT_LIB = 'PyQt6'
     except ImportError:
         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -33,6 +35,7 @@ except ImportError:
                                        QHeaderView, QTextEdit, QMessageBox, QListWidget)
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtGui import QFont
+
         QT_LIB = 'PySide6'
 
 # ---------- Константы и утилиты ----------
@@ -57,8 +60,7 @@ def first(norm_name: str) -> str:
 def last(norm_name: str) -> str:
     if not norm_name:
         return ''
-    # Й добавлена в исключения
-    if norm_name[-1] in ('ь', 'ъ', 'ы', 'й') and len(norm_name) > 1:
+    if norm_name[-1] in ('ь', 'ъ', 'ы') and len(norm_name) > 1:
         return norm_name[-2]
     return norm_name[-1]
 
@@ -273,8 +275,15 @@ class GameDialog(QDialog):
         self.logic = GameLogic('cities.json')
         self.player_start_time = None
         self.remaining_time = 0
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_timer)
+        self.elapsed_time = 0  # для классического режима
+
+        # Таймер для супер-режима (обратный отсчёт)
+        self.super_timer = QTimer(self)
+        self.super_timer.timeout.connect(self.update_super_timer)
+
+        # Таймер для классического режима (прямой счёт)
+        self.classic_timer = QTimer(self)
+        self.classic_timer.timeout.connect(self.update_classic_timer)
 
         self.setWindowTitle("Игра «Города»" if mode == 'classic' else "Супер-города")
         self.setMinimumSize(800, 600)
@@ -286,13 +295,20 @@ class GameDialog(QDialog):
 
         # Верхняя панель: время, очки, кнопка правил
         top_layout = QHBoxLayout()
-        self.label_time = QLabel("Время: —")
+
+        # Счётчик времени с крупным шрифтом
+        self.label_time = QLabel()
+        self.label_time.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.label_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_time.setMinimumWidth(200)
+
         self.label_score = QLabel("Очки: 0")
-        self.label_time.setFont(QFont("Arial", 12))
-        self.label_score.setFont(QFont("Arial", 12))
+        self.label_score.setFont(QFont("Arial", 14))
+
         top_layout.addWidget(self.label_time)
         top_layout.addWidget(self.label_score)
         top_layout.addStretch()
+
         btn_rules = QPushButton("Правила")
         btn_rules.clicked.connect(self.show_rules)
         top_layout.addWidget(btn_rules)
@@ -371,50 +387,81 @@ class GameDialog(QDialog):
         self.player_start_time = time.time()
         self.line_edit.clear()
         self.line_edit.setFocus()
-        if self.mode == 'super':
-            self.remaining_time = SUPER_TIME_LIMIT
-            self.label_time.setText(f"Осталось: {self.remaining_time} сек")
-            self.timer.start(1000)
-        else:
-            self.label_time.setText("Время: классический режим")
-            self.timer.stop()
 
-    def update_timer(self):
+        if self.mode == 'super':
+            # Супер-режим: обратный отсчёт от 30 секунд
+            self.remaining_time = SUPER_TIME_LIMIT
+            self.label_time.setText(f"⏱ {self.remaining_time} сек")
+            self.label_time.setStyleSheet("color: #333;")
+            self.super_timer.start(1000)  # обновление каждую секунду
+            self.classic_timer.stop()
+        else:
+            # Классический режим: прямой счёт времени
+            self.elapsed_time = 0
+            self.label_time.setText(f"⏱ 00:00")
+            self.label_time.setStyleSheet("color: #333;")
+            self.classic_timer.start(1000)  # обновление каждую секунду
+            self.super_timer.stop()
+
+    def update_super_timer(self):
+        """Обновление таймера в супер-режиме (обратный отсчёт)"""
         self.remaining_time -= 1
-        self.label_time.setText(f"Осталось: {self.remaining_time} сек")
+
+        # Меняем цвет когда осталось мало времени
+        if self.remaining_time <= 5:
+            self.label_time.setStyleSheet("color: red; font-weight: bold;")
+        elif self.remaining_time <= 10:
+            self.label_time.setStyleSheet("color: orange; font-weight: bold;")
+
+        self.label_time.setText(f"⏱ {self.remaining_time} сек")
+
         if self.remaining_time <= 0:
-            self.timer.stop()
+            self.super_timer.stop()
+            self.label_time.setText("⏱ 0 сек")
             QMessageBox.information(self, "Время вышло", "Время на ход истекло.")
             self.finish_game()
+
+    def update_classic_timer(self):
+        """Обновление таймера в классическом режиме (прямой счёт)"""
+        self.elapsed_time += 1
+        minutes = self.elapsed_time // 60
+        seconds = self.elapsed_time % 60
+        self.label_time.setText(f"⏱ {minutes:02d}:{seconds:02d}")
 
     def submit_city(self):
         if self.logic.game_over:
             return
+
         city = self.line_edit.text().strip()
         if not city:
             return
-        # Остановить таймер
-        if self.mode == 'super':
-            self.timer.stop()
-            elapsed = time.time() - self.player_start_time
-        else:
-            elapsed = time.time() - self.player_start_time
+
+        # Останавливаем таймеры
+        self.super_timer.stop()
+        self.classic_timer.stop()
+
+        elapsed = time.time() - self.player_start_time
 
         valid, message, score = self.logic.process_player_city(city, elapsed)
         if not valid:
             QMessageBox.warning(self, "Ошибка", message)
-            # Продолжить таймер, если не истекло время
+            # Продолжаем таймер, если не истекло время
             if self.mode == 'super' and self.remaining_time > 0:
-                self.timer.start(1000)
+                self.super_timer.start(1000)
+            elif self.mode == 'classic':
+                self.classic_timer.start(1000)
             return
 
         # Успешный ход игрока
         self.label_score.setText(f"Очки: {self.logic.total_score}")
-        self.list_history.addItem(f"Вы: {city} (+{score})")
+        self.list_history.addItem(f"Вы: {city} (+{score} очков, {elapsed:.1f}с)")
 
         # Ход компьютера
         comp_city, can_move = self.logic.computer_move()
         if not can_move:
+            self.super_timer.stop()
+            self.classic_timer.stop()
+            self.label_time.setText("⏱ --:--")
             QMessageBox.information(self, "Победа!",
                                     f"Компьютер не может назвать город. Вы выиграли!\nВаши очки: {self.logic.total_score}")
             self.finish_game()
@@ -433,6 +480,8 @@ class GameDialog(QDialog):
             self.reject()
 
     def finish_game(self):
+        self.super_timer.stop()
+        self.classic_timer.stop()
         if not self.logic.game_over:
             self.logic.game_over = True
         self.logic.save_rating(self.mode)
