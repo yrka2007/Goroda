@@ -86,7 +86,6 @@ def load_cities(json_path: str):
 
 
 def get_writable_path(filename):
-    """Путь для записи файлов"""
     if getattr(sys, 'frozen', False):
         base = os.path.dirname(sys.executable)
     else:
@@ -109,10 +108,12 @@ class GameLogic:
         self.total_score = 0
         self.turn_number = 0
         self.game_over = False
+        self.mode = None
+        self.repeat_occurred = False
 
     def start(self, mode):
-        self.mode = mode
         self.reset_state()
+        self.mode = mode  # Устанавливаем mode ПОСЛЕ reset_state()
         if not self.cities:
             return None, None
         first_norm = random.choice(list(self.cities.keys()))
@@ -129,10 +130,17 @@ class GameLogic:
         norm = norm_city_name(city_input)
         if not norm:
             return False, "Некорректное название города.", 0
+
         if norm not in self.cities:
             return False, "Такого города нет в списке.", 0
+
         if norm in self.used:
-            return False, "Этот город уже был использован.", 0
+            if self.mode == 'super':
+                self.repeat_occurred = True
+                return False, "Этот город уже был использован. Повтор запрещён в режиме «Супер-города».", 0
+            else:
+                return False, "Этот город уже был использован.", 0
+
         if first(norm) != self.current_letter:
             return False, f"Город должен начинаться на букву '{self.current_letter.upper()}'.", 0
 
@@ -258,12 +266,11 @@ class GameDialog(QDialog):
         self.player_start_time = None
         self.remaining_time = 0
         self.elapsed_time = 0
+        self.is_finished = False
 
-        # Таймер для супер-режима
         self.super_timer = QTimer(self)
         self.super_timer.timeout.connect(self.update_super_timer)
 
-        # Таймер для классического режима
         self.classic_timer = QTimer(self)
         self.classic_timer.timeout.connect(self.update_classic_timer)
 
@@ -357,9 +364,12 @@ class GameDialog(QDialog):
         self.list_history.clear()
         self.list_history.addItem(f"Компьютер: {first_orig}")
         self.label_score.setText("Очки: 0")
+        self.is_finished = False
         self.start_player_turn()
 
     def start_player_turn(self):
+        if self.is_finished:
+            return
         self.player_start_time = time.time()
         self.line_edit.clear()
         self.line_edit.setFocus()
@@ -390,7 +400,6 @@ class GameDialog(QDialog):
         if self.remaining_time <= 0:
             self.super_timer.stop()
             self.label_time.setText("⏱ 0 сек")
-            QMessageBox.information(self, "Время вышло", "Время на ход истекло.")
             self.finish_game()
 
     def update_classic_timer(self):
@@ -400,7 +409,7 @@ class GameDialog(QDialog):
         self.label_time.setText(f"⏱ {minutes:02d}:{seconds:02d}")
 
     def submit_city(self):
-        if self.logic.game_over:
+        if self.is_finished:
             return
 
         city = self.line_edit.text().strip()
@@ -411,16 +420,30 @@ class GameDialog(QDialog):
         self.classic_timer.stop()
 
         elapsed = time.time() - self.player_start_time
-
         valid, message, score = self.logic.process_player_city(city, elapsed)
-        if not valid:
-            QMessageBox.warning(self, "Ошибка", message)
-            if self.mode == 'super' and self.remaining_time > 0:
-                self.super_timer.start(1000)
-            elif self.mode == 'classic':
-                self.classic_timer.start(1000)
+
+        # Проверяем повтор в супер-режиме ПЕРЕД проверкой valid
+        if self.logic.repeat_occurred:
+            self.super_timer.stop()
+            self.classic_timer.stop()
+            QMessageBox.information(
+                self,
+                "Игра окончена",
+                f"Вы повторили город. Игра проиграна!\nВаш счёт: {self.logic.total_score} очков"
+            )
+            self.finish_game()
             return
 
+        if not valid:
+            QMessageBox.warning(self, "Ошибка", message)
+            if not self.is_finished:
+                if self.mode == 'super' and self.remaining_time > 0:
+                    self.super_timer.start(1000)
+                elif self.mode == 'classic':
+                    self.classic_timer.start(1000)
+            return
+
+        # Ход корректен
         self.label_score.setText(f"Очки: {self.logic.total_score}")
         self.list_history.addItem(f"Вы: {city} (+{score} очков, {elapsed:.1f}с)")
 
@@ -439,6 +462,9 @@ class GameDialog(QDialog):
         self.start_player_turn()
 
     def exit_game(self):
+        if self.is_finished:
+            self.reject()
+            return
         reply = QMessageBox.question(self, "Выход", "Сохранить текущий результат?",
                                      QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
@@ -447,10 +473,12 @@ class GameDialog(QDialog):
             self.reject()
 
     def finish_game(self):
+        if self.is_finished:
+            return
+        self.is_finished = True
         self.super_timer.stop()
         self.classic_timer.stop()
-        if not self.logic.game_over:
-            self.logic.game_over = True
+        self.logic.game_over = True
         self.logic.save_rating(self.mode)
         self.accept()
 
@@ -524,7 +552,7 @@ class RulesDialog(QDialog):
             "Правила игры «Города»:\n\n"
             "1. Компьютер называет город. Игрок должен назвать город, начинающийся на последнюю букву города компьютера.\n"
             "2. В классическом режиме ограничений по времени нет. В режиме «Супер-города» на ход даётся 30 секунд, "
-            "города не должны повторяться.\n"
+            "города не должны повторяться. При повторе игра заканчивается проигрышем игрока.\n"
             "3. Нельзя использовать города, которых нет в списке, или которые уже были названы.\n"
             "4. Очки начисляются за быстрый ответ: чем быстрее ответ, тем больше очков (базовая стоимость 100 очков).\n"
             "5. Игра продолжается, пока компьютер не сможет найти подходящий город — в этом случае побеждает игрок.\n"
